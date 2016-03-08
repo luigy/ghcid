@@ -87,7 +87,7 @@ startGhci cmd directory echo = do
     let ghci = Ghci (ph, f)
 #ifndef mingw32_HOST_OS
     tid <- myThreadId
-    installHandler keyboardSignal (Catch (interrupt ghci (Just "") True >> stopGhci ghci >> throwTo tid ExitSuccess)) Nothing
+    installHandler keyboardSignal (Catch (interrupt ghci (Just "") >> stopGhci ghci >> throwTo tid ExitSuccess)) Nothing
 #endif
     return (ghci, r)
 
@@ -108,6 +108,7 @@ exec :: Ghci -> String -> IO [String]
 exec (Ghci (_,f)) = f
 
 -- | Interrupt the test command.
-interrupt :: Ghci -> Maybe String -> Bool -> IO ()
-interrupt (Ghci (ph,_)) test spawn =
-    when (isJust test && spawn) $ interruptProcessGroupOf ph
+interrupt :: Ghci -> Maybe String -> IO ()
+interrupt (Ghci (ph,_)) test =
+    -- TODO: perhaps use lock to make sure it has been finalized
+    when (isJust test) $ ignore $ interruptProcessGroupOf ph
