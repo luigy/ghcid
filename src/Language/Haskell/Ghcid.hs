@@ -5,7 +5,7 @@ module Language.Haskell.Ghcid(
     Ghci, GhciError(..),
     Load(..), Severity(..),
     startGhci, stopGhci, interrupt,
-    showModules, reload, exec
+    showModules, reload, exec, withTestResult
     ) where
 
 import System.IO
@@ -43,11 +43,13 @@ startGhci cmd directory echo = do
     hSetBuffering inp LineBuffering
 
     lock <- newLock -- ensure only one person talks to ghci at a time
+    testLock <- newLock
     let prefix = "#~GHCID-START~#"
     let finish = "#~GHCID-FINISH~#"
     hPutStrLn inp $ ":set prompt " ++ prefix
     hPutStrLn inp ":set -fno-break-on-exception -fno-break-on-error" -- see #43
     echo <- newIORef echo
+    testRunning <- newVar Nothing
 
     -- consume from a handle, produce an MVar with either Just and a message, or Nothing (stream closed)
     let consume h name = do
@@ -81,13 +83,34 @@ startGhci cmd directory echo = do
                 case liftM2 (++) outC errC of
                     Nothing  -> throwIO $ UnexpectedExit cmd s
                     Just msg -> return msg
+
+    -- interrupt ghci
+    let g = withLock testLock $ do
+              running <- readVar testRunning
+              whenJust running $ \_ -> do
+                  whenLoud $ outStrLn "%INTERRUPTED"
+                  ignore $ interruptProcessGroupOf ph
+                  modifyVar_ testRunning $ \_ -> return Nothing
+
+    -- execute test command and execute handler on completion
+    let h :: String -> ([String] -> IO ()) -> IO ()
+        h s fn = withLock testLock $ do
+                     running <- readVar testRunning
+                     unless (isJust running) $ do
+                         modifyVar_ testRunning $ \_ -> return (Just ())
+                         forkIO $ do
+                             res <- f s
+                             modifyVar_ testRunning $ \_ -> return Nothing
+                             fn res
+                         return ()
+
     r <- parseLoad <$> f ""
     writeIORef echo False
 
-    let ghci = Ghci (ph, f)
+    let ghci = Ghci h g f
 #ifndef mingw32_HOST_OS
     tid <- myThreadId
-    installHandler keyboardSignal (Catch (interrupt ghci (Just "") >> stopGhci ghci >> throwTo tid ExitSuccess)) Nothing
+    installHandler keyboardSignal (Catch (g >> stopGhci ghci >> throwTo tid ExitSuccess)) Nothing
 #endif
     return (ghci, r)
 
@@ -105,10 +128,13 @@ stopGhci ghci = handle (\UnexpectedExit{} -> return ()) $ void $ exec ghci ":qui
 
 -- | Send a command, get lines of result
 exec :: Ghci -> String -> IO [String]
-exec (Ghci (_,f)) = f
+exec (Ghci _ _ f) = f
 
--- | Interrupt the test command.
-interrupt :: Ghci -> Maybe String -> IO ()
-interrupt (Ghci (ph,_)) test =
-    -- TODO: perhaps use lock to make sure it has been finalized
-    when (isJust test) $ ignore $ interruptProcessGroupOf ph
+-- | Interrupt Ghci. Useful to terminate long running test commands.
+interrupt :: Ghci -> IO ()
+interrupt (Ghci _ f _) = f
+
+-- | Execute test command and it's handler upon completion.
+-- discards test if one is currently running
+withTestResult :: Ghci -> String -> ([String] -> IO ()) -> IO ()
+withTestResult (Ghci f _ _) = f

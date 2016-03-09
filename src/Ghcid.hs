@@ -199,24 +199,14 @@ runGhcid waiter restart command outputfiles test size titles output = do
             let outputTest res = do
                     outputFill (Just (loadedCount, messages)) $ fromMaybe res $ stripSuffix ["*** Exception: ExitSuccess"] res
                     updateTitle ""
-            testVar <- newVar Nothing
-            testCmd <- case test of
-                Just test ->
-                    onceFork $ do
-                        modifyVar_ testVar $ const $ return $ Just ()
-                        output <- exec ghci test
-                        modifyVar_ testVar $ const $ return Nothing
-                        outputTest output
-                _ -> return $ return ()
+            whenJust test $ \t -> withTestResult ghci t outputTest
 
             when (null wait) $ do
                 putStrLn $ "No files loaded, nothing to wait for. Fix the last error and restart."
-                vv <- readVar testVar
-                whenJust vv $ \_ -> interrupt ghci test
+                interrupt ghci
                 exitFailure
             reason <- nextWait $ restart ++ wait
-            vv <- readVar testVar
-            whenJust vv $ \_ -> interrupt ghci test
+            interrupt ghci
             outputFill Nothing $ "Reloading..." : map ("  " ++) reason
             restartTimes2 <- mapM getModTime restart
             if restartTimes == restartTimes2 then do

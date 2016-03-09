@@ -8,10 +8,12 @@ module Language.Haskell.Ghcid.Types(
 
 import Data.Typeable
 import Control.Exception.Base (Exception)
-import System.Process (ProcessHandle)
+-- import System.Process (ProcessHandle)
 
 -- | A GHCi session. Created with 'startGhci'.
-newtype Ghci = Ghci (ProcessHandle, String -> IO [String])
+data Ghci = Ghci (String -> ([String] -> IO ()) -> IO ())
+                 (IO ())
+                 (String -> IO [String])
 
 -- | GHCi shut down
 data GhciError = UnexpectedExit String String
